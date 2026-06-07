@@ -50,6 +50,14 @@
   .rhead .meta{font-size:12px;color:var(--muted)}
   .empty{color:var(--muted);font-size:13px;text-align:center;padding:18px}
   .pill{font-size:11px;color:var(--muted)}
+  button.rsv{padding:5px 12px;font-size:12px;background:var(--ok)}
+  #reserveMsg{margin:14px 0}
+  .banner{border-radius:12px;padding:14px 16px;font-size:14px;line-height:1.6}
+  .banner.ok{background:rgba(34,197,94,.12);border:1px solid rgba(34,197,94,.4);color:#bbf7d0}
+  .banner.err{background:rgba(255,107,107,.1);border:1px solid rgba(255,107,107,.4);color:#fecaca}
+  .banner b{color:#fff}
+  .banner .warn{display:block;margin-top:8px;font-weight:700;color:#fde047}
+  .banner .close{float:right;cursor:pointer;color:var(--muted);font-weight:700}
   .loginbox.done{opacity:.6}
   .small{font-size:11px;color:var(--muted);margin-top:6px}
 </style>
@@ -95,6 +103,9 @@
     <div class="fld"><label>KTX 도착역</label>
       <select id="ktxArr"><option value="수원">수원</option><option value="서울">서울</option></select>
     </div>
+    <div class="fld"><label>어른 인원</label>
+      <select id="adults"><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option><option>6</option></select>
+    </div>
     <button onclick="searchAll()" id="searchBtn">조회</button>
     <label class="auto"><input type="checkbox" id="availOnly" style="width:auto" checked onchange="rerender()"> 예약 가능만 보기</label>
     <label class="auto"><input type="checkbox" id="autoChk" style="width:auto" onchange="toggleAuto()"> 자동 새로고침</label>
@@ -104,6 +115,7 @@
     </select>
   </div>
   <div class="status" id="autoStatus"></div>
+  <div id="reserveMsg"></div>
 
   <!-- 결과 -->
   <div id="srtResult"></div>
@@ -170,6 +182,7 @@ function renderTable(containerId, title, tagClass, data, fromRerender){
   const all = data.trains||[];
   let rows = '';
   let availCount = 0;
+  const kind = tagClass==='srt' ? 'srt' : 'korail';
   all.forEach(t=>{
     const any = t.general || t.special;
     if(any) availCount++;
@@ -177,18 +190,21 @@ function renderTable(containerId, title, tagClass, data, fromRerender){
     const g = t.general ? '<span class="seat y">일반 가능</span>' : '<span class="seat n">일반 매진</span>';
     const s = t.special ? '<span class="seat s">특실 가능</span>' : '<span class="seat n">특실 매진</span>';
     const sb = t.standby ? ' <span class="seat s">예약대기</span>' : '';
+    const btn = any
+      ? `<button class="rsv" onclick="reserveTrain('${kind}','${t.no}','${t.dep_time}')">선점</button>`
+      : '<span class="pill">-</span>';
     rows += `<tr><td class="time">${t.dep_time}</td><td class="time">${t.arr_time}</td>
-      <td>${t.name} ${t.no}</td><td>${g}</td><td>${s}${sb}</td></tr>`;
+      <td>${t.name} ${t.no}</td><td>${g}</td><td>${s}${sb}</td><td>${btn}</td></tr>`;
   });
   let emptyMsg;
   if(all.length === 0) emptyMsg = '해당 시간 이후 열차가 없습니다.';
   else if(availOnly && availCount === 0) emptyMsg = '예약 가능한 좌석이 아직 없습니다. (전체 ' + all.length + '개 매진)';
   else emptyMsg = '';
-  const body = rows || `<tr><td colspan="5" class="empty">${emptyMsg}</td></tr>`;
+  const body = rows || `<tr><td colspan="6" class="empty">${emptyMsg}</td></tr>`;
   c.innerHTML = `<div class="card result-card">
     <div class="rhead"><h2><span class="tag ${tagClass}">${title}</span> ${route}</h2>
       <span class="meta">전체 ${all.length}개 · <b style="color:var(--ok)">예약가능 ${availCount}개</b></span></div>
-    <table><thead><tr><th>출발</th><th>도착</th><th>열차</th><th>일반실</th><th>특실</th></tr></thead>
+    <table><thead><tr><th>출발</th><th>도착</th><th>열차</th><th>일반실</th><th>특실</th><th>예매</th></tr></thead>
     <tbody>${body}</tbody></table></div>`;
   if(fromRerender) return; // 토글 재렌더 시엔 알림 판정 생략
 
@@ -230,6 +246,34 @@ function toggleAuto(){
   }else if(timer){ clearInterval(timer); timer=null; }
 }
 document.getElementById('interval').addEventListener('change',()=>{ if(document.getElementById('autoChk').checked){ toggleAuto(); document.getElementById('autoChk').checked=true; toggleAuto(); }});
+
+async function reserveTrain(kind, trainNo, depTime){
+  const token = kind==='srt' ? T.srt : T.korail;
+  const label = kind==='srt' ? 'SRT' : 'KTX';
+  if(!token){ showReserve(false, `${label}에 먼저 로그인해 주세요.`); return; }
+  const adults = parseInt(document.getElementById('adults').value);
+  const arr = document.getElementById('ktxArr').value;
+  const route = kind==='srt' ? '동대구 → 수서' : `동대구 → ${arr}`;
+  if(!confirm(`${label} ${route}\n${depTime} 출발 / 열차 ${trainNo}\n어른 ${adults}명 · 일반실 우선으로 좌석을 선점합니다.\n\n※ 선점만 하며 결제는 자동으로 되지 않습니다. 제한시간 내 SRT/코레일 앱에서 직접 결제해야 확정됩니다.\n\n진행할까요?`)) return;
+  showReserve(null, '좌석을 선점하는 중입니다…');
+  try{
+    const d = await api('/api/reserve/'+kind, {token, date:fmtDate(), time:fmtTime(), train_no:trainNo, dep_time:depTime, arr, adults});
+    const cost = d.cost ? Number(d.cost).toLocaleString('ko-KR')+'원' : '-';
+    const num = d.number || '-';
+    const pay = d.pay_limit ? `결제 마감 <b>${d.pay_limit}</b>까지` : '제한시간 내';
+    showReserve(true,
+      `✅ <b>${d.kind} ${d.train}</b> ${d.dep_time}→${d.arr_time} · 어른 ${d.adults}명 좌석을 선점했습니다.<br>`+
+      `예약번호 <b>${num}</b> · 금액 <b>${cost}</b><br>`+
+      `<span class="warn">⚠️ 아직 결제 전입니다. ${pay} <b>${d.kind}/코레일 앱·웹에서 직접 결제</b>해야 확정됩니다. 미결제 시 자동 취소돼요.</span>`);
+  }catch(e){ showReserve(false, '선점 실패: '+e.message); }
+}
+
+function showReserve(ok, html){
+  const box = document.getElementById('reserveMsg');
+  const cls = ok===true ? 'ok' : ok===false ? 'err' : 'ok';
+  box.innerHTML = `<div class="banner ${cls}"><span class="close" onclick="document.getElementById('reserveMsg').innerHTML=''">✕</span>${html}</div>`;
+  box.scrollIntoView({behavior:'smooth', block:'nearest'});
+}
 
 function notify(title, body){
   try{ document.getElementById('ding').play().catch(()=>{}); }catch(e){}
