@@ -93,21 +93,50 @@ def login_srt(req: LoginReq):
 
 @app.post("/api/login/korail")
 def login_korail(req: LoginReq):
+    kid = req.id.strip()
     try:
-        client = Korail(req.id.strip(), req.pw)
-        if not getattr(client, "logined", True):
-            raise RuntimeError("login failed")
+        client = Korail(kid, req.pw, auto_login=False)
+        ok, reason = _korail_login_reason(client, kid, req.pw)
     except Exception:
-        raise HTTPException(
-            status_code=400,
-            detail="코레일 로그인 실패: 아래를 확인해 주세요. ① 코레일(KTX) 회원인지 — SRT와 코레일은 별도 회원입니다. "
-                   "② 아이디 형식(회원번호 8~10자리 / 이메일 / 휴대폰). ③ 코레일이 자동화 도구를 일시 차단(MACRO)했을 수 있어, "
-                   "이 경우 잠시 후 재시도하거나 코레일톡 공식 앱을 이용해 주세요.",
-        )
+        ok, reason = False, None
+    if not ok:
+        hint = ("① 코레일(KTX) 회원인지 — SRT와 코레일은 별도 회원입니다. "
+                "② 아이디 형식(회원번호 8~10자리 / 이메일 / 휴대폰). "
+                "③ 자동화 차단(MACRO)일 경우 잠시 후 재시도하거나 코레일톡 공식 앱을 이용해 주세요.")
+        msg = f"코레일 로그인 실패: {reason} " if reason else "코레일 로그인 실패. "
+        raise HTTPException(status_code=400, detail=msg + hint)
     token = secrets.token_urlsafe(24)
     with _lock:
         SESSIONS[token] = {"client": client, "kind": "korail", "ts": time.time()}
     return {"token": token}
+
+
+def _korail_login_reason(client, kid, pw):
+    """라이브러리와 동일한 로그인 요청을 보내되, 실패 시 코레일이 준 사유 텍스트를 반환.
+    (요청 파라미터는 korail2 원본과 동일 — 위장/우회 없음, 메시지 노출 목적)"""
+    import json as _json
+    import korail2.korail2 as kk
+    if kk.EMAIL_REGEX.match(kid):
+        flg = '5'
+    elif kk.PHONE_NUMBER_REGEX.match(kid):
+        flg = '4'
+    else:
+        flg = '2'
+    enc = client._Korail__enc_password(pw)  # KORAIL_CODE 호출 + _idx 설정
+    if enc is False:
+        return False, None
+    data = {'Device': client._device, 'Version': '231231001', 'txtInputFlg': flg,
+            'txtMemberNo': kid, 'txtPwd': enc, 'idx': client._idx}
+    r = client._session.post(kk.KORAIL_LOGIN, data=data)
+    j = _json.loads(r.text)
+    if j.get('strResult') == 'SUCC' and j.get('strMbCrdNo') is not None:
+        client._key = j['Key']
+        client.membership_number = j['strMbCrdNo']
+        client.name = j.get('strCustNm')
+        client.email = j.get('strEmailAdr')
+        client.logined = True
+        return True, None
+    return False, (j.get('h_msg_txt') or j.get('h_msg_cd') or "").strip() or None
 
 
 @app.post("/api/logout")
