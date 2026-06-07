@@ -58,6 +58,10 @@
   .banner b{color:#fff}
   .banner .warn{display:block;margin-top:8px;font-weight:700;color:#fde047}
   .banner .close{float:right;cursor:pointer;color:var(--muted);font-weight:700}
+  .autorsv{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:10px 12px;
+    background:rgba(34,197,94,.06);border:1px dashed rgba(34,197,94,.45);border-radius:10px;margin:0 0 10px}
+  .autorsv input[type=time]{width:auto;padding:6px 8px}
+  .autorsv .lbl{font-size:13px;color:#86efac;font-weight:700}
   .loginbox.done{opacity:.6}
   .small{font-size:11px;color:var(--muted);margin-top:6px}
 </style>
@@ -114,6 +118,14 @@
       <option value="30" selected>30초</option><option value="60">1분</option>
       <option value="120">2분</option><option value="300">5분</option>
     </select>
+  </div>
+  <div class="autorsv">
+    <label class="auto"><input type="checkbox" id="autoRsv" style="width:auto" onchange="armAutoReserve()"> <span class="lbl">🤖 자동 선점</span></label>
+    <span class="pill">출발</span>
+    <input type="time" id="autoStart" value="16:00">
+    <span class="pill">~</span>
+    <input type="time" id="autoEnd" value="20:00">
+    <span class="pill">사이 자리 나면 어른 인원·일반실 우선으로 <b>1개만</b> 자동 선점 후 중지</span>
   </div>
   <div class="status" id="autoStatus"></div>
   <div id="reserveMsg"></div>
@@ -233,7 +245,13 @@ async function searchAll(){
   }
   if(!T.srt && !T.korail){ st.className='status err'; st.textContent='먼저 SRT 또는 코레일에 로그인해 주세요.'; return; }
   const now=new Date().toLocaleTimeString('ko-KR');
-  st.className='status ok'; st.textContent='마지막 조회 '+now;
+  if(document.getElementById('autoRsv').checked && !autoReserveDone){
+    const s=document.getElementById('autoStart').value, e=document.getElementById('autoEnd').value;
+    st.className='status ok'; st.textContent=`🤖 자동 선점 대기 중 (출발 ${s}~${e}) · 마지막 조회 ${now}`;
+  } else {
+    st.className='status ok'; st.textContent='마지막 조회 '+now;
+  }
+  await tryAutoReserve();
 }
 
 let timer=null;
@@ -256,17 +274,79 @@ async function reserveTrain(kind, trainNo, depTime){
   const arr = document.getElementById('ktxArr').value;
   const route = kind==='srt' ? '동대구 → 수서' : `동대구 → ${arr}`;
   if(!confirm(`${label} ${route}\n${depTime} 출발 / 열차 ${trainNo}\n어른 ${adults}명 · 일반실 우선으로 좌석을 선점합니다.\n\n※ 선점만 하며 결제는 자동으로 되지 않습니다. 제한시간 내 SRT/코레일 앱에서 직접 결제해야 확정됩니다.\n\n진행할까요?`)) return;
-  showReserve(null, '좌석을 선점하는 중입니다…');
+  doReserve(kind, trainNo, depTime, false);
+}
+
+async function doReserve(kind, trainNo, depTime, isAuto){
+  const token = kind==='srt' ? T.srt : T.korail;
+  const adults = parseInt(document.getElementById('adults').value);
+  const arr = document.getElementById('ktxArr').value;
+  const pre = isAuto ? '🤖 자동 ' : '';
+  showReserve(null, pre+'좌석을 선점하는 중입니다…');
   try{
     const d = await api('/api/reserve/'+kind, {token, date:fmtDate(), time:fmtTime(), train_no:trainNo, dep_time:depTime, arr, adults});
     const cost = d.cost ? Number(d.cost).toLocaleString('ko-KR')+'원' : '-';
     const num = d.number || '-';
     const pay = d.pay_limit ? `결제 마감 <b>${d.pay_limit}</b>까지` : '제한시간 내';
     showReserve(true,
-      `✅ <b>${d.kind} ${d.train}</b> ${d.dep_time}→${d.arr_time} · 어른 ${d.adults}명 좌석을 선점했습니다.<br>`+
+      `✅ ${isAuto?'<b>자동 선점 완료</b> — ':''}<b>${d.kind} ${d.train}</b> ${d.dep_time}→${d.arr_time} · 어른 ${d.adults}명 좌석을 선점했습니다.<br>`+
       `예약번호 <b>${num}</b> · 금액 <b>${cost}</b><br>`+
       `<span class="warn">⚠️ 아직 결제 전입니다. ${pay} <b>${d.kind}/코레일 앱·웹에서 직접 결제</b>해야 확정됩니다. 미결제 시 자동 취소돼요.</span>`);
-  }catch(e){ showReserve(false, '선점 실패: '+e.message); }
+    notify(pre+'좌석 선점 완료', `${d.kind} ${d.train} ${d.dep_time} · 결제해 주세요`);
+    return true;
+  }catch(e){ showReserve(false, pre+'선점 실패: '+e.message); return false; }
+}
+
+// ── 자동 선점 ────────────────────────────────────────────────────────
+let autoReserveDone=false, autoReserveBusy=false;
+
+function armAutoReserve(){
+  const on=document.getElementById('autoRsv').checked;
+  const st=document.getElementById('autoStatus');
+  if(!on){ st.className='status'; st.textContent=''; return; }
+  if(!T.srt && !T.korail){ alert('먼저 SRT 또는 코레일에 로그인해 주세요.'); document.getElementById('autoRsv').checked=false; return; }
+  const s=document.getElementById('autoStart').value, e=document.getElementById('autoEnd').value;
+  const adults=document.getElementById('adults').value;
+  if(s>=e){ alert('종료 시각을 시작 시각보다 늦게 설정해 주세요.'); document.getElementById('autoRsv').checked=false; return; }
+  if(!confirm(`자동 선점을 켭니다.\n\n출발 ${s} ~ ${e} 사이에 예약가능한 열차가 나타나면\n어른 ${adults}명 · 일반실 우선으로 1개를 자동으로 선점합니다.\n1개 선점하면 자동 선점·새로고침이 멈춥니다.\n\n※ 결제는 자동으로 되지 않습니다. 제한시간 내 직접 결제해야 확정됩니다.\n\n시작할까요?`)){
+    document.getElementById('autoRsv').checked=false; return;
+  }
+  autoReserveDone=false;
+  // 조회 시작 시각을 시간대 시작으로 맞춰 해당 구간 열차를 확실히 포함
+  document.getElementById('time').value=s;
+  // 자동 새로고침이 꺼져 있으면 함께 켠다
+  if(!document.getElementById('autoChk').checked){ document.getElementById('autoChk').checked=true; toggleAuto(); }
+  else { searchAll(); }
+  st.className='status ok'; st.textContent=`🤖 자동 선점 대기 중 — 출발 ${s}~${e}`;
+}
+
+function inWindow(dep, s, e){ return dep>=s && dep<=e; }
+
+async function tryAutoReserve(){
+  if(autoReserveDone || autoReserveBusy) return;
+  if(!document.getElementById('autoRsv').checked) return;
+  const s=document.getElementById('autoStart').value, e=document.getElementById('autoEnd').value;
+  const cands=[];
+  for(const id in lastData){
+    const {tagClass, data}=lastData[id];
+    const kind=tagClass==='srt'?'srt':'korail';
+    (data.trains||[]).forEach(t=>{
+      if((t.general||t.special) && inWindow(t.dep_time, s, e)) cands.push({kind, no:t.no, dep:t.dep_time});
+    });
+  }
+  if(!cands.length) return;
+  cands.sort((a,b)=>a.dep.localeCompare(b.dep)); // 시간대 내 가장 이른 열차
+  const pick=cands[0];
+  autoReserveBusy=true;
+  const ok=await doReserve(pick.kind, pick.no, pick.dep, true);
+  autoReserveBusy=false;
+  if(ok){
+    autoReserveDone=true;
+    document.getElementById('autoRsv').checked=false;
+    if(document.getElementById('autoChk').checked){ document.getElementById('autoChk').checked=false; toggleAuto(); }
+    const st=document.getElementById('autoStatus');
+    st.className='status ok'; st.textContent='🤖 자동 선점 완료 — 자동 선점·새로고침을 멈췄습니다. 결제해 주세요.';
+  }
 }
 
 function showReserve(ok, html){
