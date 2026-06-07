@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SRT · KTX 잔여석 조회</title>
+<style>
+  :root{
+    --bg:#0f1115; --panel:#181b22; --panel2:#1f232c; --line:#2a2f3a;
+    --txt:#e8eaed; --muted:#9aa3b2; --accent:#7c5cff; --ok:#22c55e; --no:#4b5160;
+    --srt:#7c5cff; --ktx:#2f7fff;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--txt);
+    font-family:-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Pretendard",sans-serif;
+    line-height:1.5}
+  .wrap{max-width:980px;margin:0 auto;padding:24px 16px 80px}
+  h1{font-size:22px;margin:0 0 4px;letter-spacing:-.3px}
+  .sub{color:var(--muted);font-size:13px;margin-bottom:20px}
+  .grid{display:grid;gap:16px}
+  @media(min-width:760px){.cols2{grid-template-columns:1fr 1fr}}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px}
+  .card h2{font-size:15px;margin:0 0 12px;display:flex;align-items:center;gap:8px}
+  .tag{font-size:11px;font-weight:700;padding:2px 8px;border-radius:999px;color:#fff}
+  .tag.srt{background:var(--srt)} .tag.ktx{background:var(--ktx)}
+  label{display:block;font-size:12px;color:var(--muted);margin:8px 0 4px}
+  input,select{width:100%;background:var(--panel2);border:1px solid var(--line);
+    color:var(--txt);border-radius:9px;padding:9px 10px;font-size:14px;outline:none}
+  input:focus,select:focus{border-color:var(--accent)}
+  .row{display:flex;gap:8px}.row>*{flex:1}
+  button{cursor:pointer;border:none;border-radius:9px;padding:9px 14px;font-size:14px;
+    font-weight:600;color:#fff;background:var(--accent);transition:.15s opacity}
+  button:hover{opacity:.9} button:disabled{opacity:.45;cursor:not-allowed}
+  button.ghost{background:transparent;border:1px solid var(--line);color:var(--muted)}
+  .status{font-size:12px;margin-top:8px;min-height:16px}
+  .status.ok{color:var(--ok)} .status.err{color:#ff6b6b}
+  .controls{display:flex;flex-wrap:wrap;gap:10px;align-items:end;margin:18px 0}
+  .controls .fld{min-width:120px}
+  .auto{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--muted)}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{padding:9px 8px;text-align:center;border-bottom:1px solid var(--line)}
+  th{color:var(--muted);font-weight:600;font-size:12px}
+  td.time{font-variant-numeric:tabular-nums;font-weight:600}
+  .seat{display:inline-block;min-width:62px;padding:3px 8px;border-radius:7px;font-size:12px;font-weight:700}
+  .seat.y{background:rgba(34,197,94,.16);color:#4ade80}
+  .seat.n{background:rgba(75,81,96,.25);color:#6b7280}
+  .seat.s{background:rgba(124,92,255,.18);color:#a78bfa}
+  .result-card{margin-top:16px}
+  .rhead{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+  .rhead .meta{font-size:12px;color:var(--muted)}
+  .empty{color:var(--muted);font-size:13px;text-align:center;padding:18px}
+  .pill{font-size:11px;color:var(--muted)}
+  .loginbox.done{opacity:.6}
+  .small{font-size:11px;color:var(--muted);margin-top:6px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🚄 SRT · KTX 잔여석 조회</h1>
+  <div class="sub">SRT 동대구→수서 · KTX 동대구→수원/서울 · 공식 API가 없어 회원 로그인 기반으로 조회합니다. 입력한 로그인 정보는 서버 메모리에만 잠시 보관되고 저장되지 않습니다.</div>
+
+  <!-- 로그인 -->
+  <div class="grid cols2">
+    <div class="card loginbox" id="srtBox">
+      <h2><span class="tag srt">SRT</span> 로그인</h2>
+      <label>회원번호 / 이메일 / 휴대폰</label>
+      <input id="srtId" autocomplete="username" placeholder="SRT 회원 아이디">
+      <label>비밀번호</label>
+      <input id="srtPw" type="password" autocomplete="current-password">
+      <div class="row" style="margin-top:10px">
+        <button onclick="login('srt')">로그인</button>
+        <button class="ghost" onclick="logout('srt')">로그아웃</button>
+      </div>
+      <div class="status" id="srtStatus"></div>
+    </div>
+
+    <div class="card loginbox" id="ktxBox">
+      <h2><span class="tag ktx">KTX</span> 코레일 로그인</h2>
+      <label>회원번호 / 이메일 / 휴대폰</label>
+      <input id="ktxId" autocomplete="username" placeholder="코레일 회원 아이디">
+      <label>비밀번호</label>
+      <input id="ktxPw" type="password" autocomplete="current-password">
+      <div class="row" style="margin-top:10px">
+        <button onclick="login('korail')">로그인</button>
+        <button class="ghost" onclick="logout('korail')">로그아웃</button>
+      </div>
+      <div class="status" id="ktxStatus"></div>
+    </div>
+  </div>
+
+  <!-- 조회 조건 -->
+  <div class="controls">
+    <div class="fld"><label>날짜</label><input type="date" id="date"></div>
+    <div class="fld"><label>이후 시각</label><input type="time" id="time" value="06:00"></div>
+    <div class="fld"><label>KTX 도착역</label>
+      <select id="ktxArr"><option value="수원">수원</option><option value="서울">서울</option></select>
+    </div>
+    <button onclick="searchAll()" id="searchBtn">조회</button>
+    <label class="auto"><input type="checkbox" id="autoChk" style="width:auto" onchange="toggleAuto()"> 자동 새로고침</label>
+    <select id="interval" style="width:auto">
+      <option value="30">30초</option><option value="60" selected>1분</option>
+      <option value="120">2분</option><option value="300">5분</option>
+    </select>
+  </div>
+  <div class="status" id="autoStatus"></div>
+
+  <!-- 결과 -->
+  <div id="srtResult"></div>
+  <div id="ktxResult"></div>
+</div>
+
+<audio id="ding" preload="auto" src="data:audio/wav;base64,UklGRl9vT19XQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQ=="></audio>
+
+<script>
+const T = { srt:null, korail:null };
+
+// 기본 날짜 = 오늘
+document.getElementById('date').value = new Date().toISOString().slice(0,10);
+
+async function api(path, body){
+  const r = await fetch(path, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+  const data = await r.json().catch(()=>({}));
+  if(!r.ok) throw new Error(data.detail || '요청 실패');
+  return data;
+}
+
+async function login(kind){
+  const ids = kind==='srt' ? ['srtId','srtPw','srtStatus','srtBox'] : ['ktxId','ktxPw','ktxStatus','ktxBox'];
+  const id = document.getElementById(ids[0]).value.trim();
+  const pw = document.getElementById(ids[1]).value;
+  const st = document.getElementById(ids[2]);
+  if(!id||!pw){ st.className='status err'; st.textContent='아이디와 비밀번호를 입력해 주세요.'; return; }
+  st.className='status'; st.textContent='로그인 중…';
+  try{
+    const d = await api('/api/login/'+kind, {id, pw});
+    T[kind] = d.token;
+    st.className='status ok'; st.textContent='✓ 로그인됨';
+    document.getElementById(ids[3]).classList.add('done');
+  }catch(e){ st.className='status err'; st.textContent=e.message; }
+}
+
+async function logout(kind){
+  if(T[kind]){ await api('/api/logout',{token:T[kind]}).catch(()=>{}); }
+  T[kind]=null;
+  const map = kind==='srt'?['srtStatus','srtBox']:['ktxStatus','ktxBox'];
+  document.getElementById(map[0]).textContent=''; document.getElementById(map[0]).className='status';
+  document.getElementById(map[1]).classList.remove('done');
+}
+
+function fmtDate(){ return document.getElementById('date').value.replaceAll('-',''); }
+function fmtTime(){ return document.getElementById('time').value.replace(':','')+'00'; }
+
+let lastAvail = {}; // 알림용: route+no -> available?
+
+function renderTable(containerId, title, tagClass, data){
+  const c = document.getElementById(containerId);
+  if(!data){ c.innerHTML=''; return; }
+  const route = `${data.dep} → ${data.arr}`;
+  let rows = '';
+  let availCount = 0;
+  (data.trains||[]).forEach(t=>{
+    const g = t.general ? '<span class="seat y">일반 가능</span>' : '<span class="seat n">일반 매진</span>';
+    const s = t.special ? '<span class="seat s">특실 가능</span>' : '<span class="seat n">특실 매진</span>';
+    const sb = t.standby ? ' <span class="seat s">예약대기</span>' : '';
+    const any = t.general || t.special;
+    if(any) availCount++;
+    rows += `<tr><td class="time">${t.dep_time}</td><td class="time">${t.arr_time}</td>
+      <td>${t.name} ${t.no}</td><td>${g}</td><td>${s}${sb}</td></tr>`;
+  });
+  const body = rows || `<tr><td colspan="5" class="empty">해당 시간 이후 열차가 없습니다.</td></tr>`;
+  c.innerHTML = `<div class="card result-card">
+    <div class="rhead"><h2><span class="tag ${tagClass}">${title}</span> ${route}</h2>
+      <span class="meta">${(data.trains||[]).length}개 · 예약가능 ${availCount}개</span></div>
+    <table><thead><tr><th>출발</th><th>도착</th><th>열차</th><th>일반실</th><th>특실</th></tr></thead>
+    <tbody>${body}</tbody></table></div>`;
+
+  // 알림: 매진→가능 전환 감지
+  (data.trains||[]).forEach(t=>{
+    const key = title+t.no+t.dep_time;
+    const now = t.general || t.special;
+    if(now && lastAvail[key]===false){ notify(`${title} ${route}`, `${t.dep_time} ${t.name} 좌석이 생겼습니다!`); }
+    lastAvail[key]=now;
+  });
+}
+
+async function searchAll(){
+  const st = document.getElementById('autoStatus');
+  const date=fmtDate(), time=fmtTime();
+  let did=false;
+  if(T.srt){
+    try{ const d=await api('/api/search/srt',{token:T.srt,date,time}); renderTable('srtResult','SRT','srt',d); did=true; }
+    catch(e){ document.getElementById('srtResult').innerHTML=`<div class="card"><div class="status err">SRT: ${e.message}</div></div>`; }
+  }
+  if(T.korail){
+    const arr=document.getElementById('ktxArr').value;
+    try{ const d=await api('/api/search/korail',{token:T.korail,date,time,arr}); renderTable('ktxResult','KTX','ktx',d); did=true; }
+    catch(e){ document.getElementById('ktxResult').innerHTML=`<div class="card"><div class="status err">KTX: ${e.message}</div></div>`; }
+  }
+  if(!T.srt && !T.korail){ st.className='status err'; st.textContent='먼저 SRT 또는 코레일에 로그인해 주세요.'; return; }
+  const now=new Date().toLocaleTimeString('ko-KR');
+  st.className='status ok'; st.textContent='마지막 조회 '+now;
+}
+
+let timer=null;
+function toggleAuto(){
+  const on=document.getElementById('autoChk').checked;
+  if(on){
+    if(Notification && Notification.permission==='default') Notification.requestPermission();
+    searchAll();
+    const sec=parseInt(document.getElementById('interval').value)*1000;
+    timer=setInterval(searchAll, sec);
+  }else if(timer){ clearInterval(timer); timer=null; }
+}
+document.getElementById('interval').addEventListener('change',()=>{ if(document.getElementById('autoChk').checked){ toggleAuto(); document.getElementById('autoChk').checked=true; toggleAuto(); }});
+
+function notify(title, body){
+  try{ document.getElementById('ding').play().catch(()=>{}); }catch(e){}
+  if(window.Notification && Notification.permission==='granted'){ new Notification(title,{body}); }
+}
+</script>
+</body>
+</html>

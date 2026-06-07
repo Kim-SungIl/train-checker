@@ -1,0 +1,6 @@
+.venv/
+__pycache__/
+*.pyc
+.plaza.env
+*.env
+.DS_Store
