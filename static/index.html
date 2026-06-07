@@ -96,6 +96,7 @@
       <select id="ktxArr"><option value="수원">수원</option><option value="서울">서울</option></select>
     </div>
     <button onclick="searchAll()" id="searchBtn">조회</button>
+    <label class="auto"><input type="checkbox" id="availOnly" style="width:auto" checked onchange="rerender()"> 예약 가능만 보기</label>
     <label class="auto"><input type="checkbox" id="autoChk" style="width:auto" onchange="toggleAuto()"> 자동 새로고침</label>
     <select id="interval" style="width:auto">
       <option value="30">30초</option><option value="60" selected>1분</option>
@@ -151,28 +152,45 @@ function fmtDate(){ return document.getElementById('date').value.replaceAll('-',
 function fmtTime(){ return document.getElementById('time').value.replace(':','')+'00'; }
 
 let lastAvail = {}; // 알림용: route+no -> available?
+const lastData = {}; // containerId -> {title, tagClass, data}
 
-function renderTable(containerId, title, tagClass, data){
+function rerender(){
+  for(const id in lastData){
+    const d = lastData[id];
+    renderTable(id, d.title, d.tagClass, d.data, true);
+  }
+}
+
+function renderTable(containerId, title, tagClass, data, fromRerender){
   const c = document.getElementById(containerId);
   if(!data){ c.innerHTML=''; return; }
+  lastData[containerId] = {title, tagClass, data};
+  const availOnly = document.getElementById('availOnly').checked;
   const route = `${data.dep} → ${data.arr}`;
+  const all = data.trains||[];
   let rows = '';
   let availCount = 0;
-  (data.trains||[]).forEach(t=>{
+  all.forEach(t=>{
+    const any = t.general || t.special;
+    if(any) availCount++;
+    if(availOnly && !any) return; // 예약 가능만 보기
     const g = t.general ? '<span class="seat y">일반 가능</span>' : '<span class="seat n">일반 매진</span>';
     const s = t.special ? '<span class="seat s">특실 가능</span>' : '<span class="seat n">특실 매진</span>';
     const sb = t.standby ? ' <span class="seat s">예약대기</span>' : '';
-    const any = t.general || t.special;
-    if(any) availCount++;
     rows += `<tr><td class="time">${t.dep_time}</td><td class="time">${t.arr_time}</td>
       <td>${t.name} ${t.no}</td><td>${g}</td><td>${s}${sb}</td></tr>`;
   });
-  const body = rows || `<tr><td colspan="5" class="empty">해당 시간 이후 열차가 없습니다.</td></tr>`;
+  let emptyMsg;
+  if(all.length === 0) emptyMsg = '해당 시간 이후 열차가 없습니다.';
+  else if(availOnly && availCount === 0) emptyMsg = '예약 가능한 좌석이 아직 없습니다. (전체 ' + all.length + '개 매진)';
+  else emptyMsg = '';
+  const body = rows || `<tr><td colspan="5" class="empty">${emptyMsg}</td></tr>`;
   c.innerHTML = `<div class="card result-card">
     <div class="rhead"><h2><span class="tag ${tagClass}">${title}</span> ${route}</h2>
-      <span class="meta">${(data.trains||[]).length}개 · 예약가능 ${availCount}개</span></div>
+      <span class="meta">전체 ${all.length}개 · <b style="color:var(--ok)">예약가능 ${availCount}개</b></span></div>
     <table><thead><tr><th>출발</th><th>도착</th><th>열차</th><th>일반실</th><th>특실</th></tr></thead>
     <tbody>${body}</tbody></table></div>`;
+  if(fromRerender) return; // 토글 재렌더 시엔 알림 판정 생략
 
   // 알림: 매진→가능 전환 감지
   (data.trains||[]).forEach(t=>{
