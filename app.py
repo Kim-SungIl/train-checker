@@ -16,6 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from SRT import SRT
+from SRT.errors import SRTLoginError, SRTResponseError
 from SRT.passenger import Adult
 from SRT.seat_type import SeatType
 from korail2 import Korail, TrainType, NoResultsError, AdultPassenger, ReserveOption, SoldOutError
@@ -78,6 +79,10 @@ class ReserveReq(BaseModel):
 def login_srt(req: LoginReq):
     try:
         client = SRT(req.id.strip(), req.pw)
+    except (SRTLoginError, SRTResponseError) as e:
+        # SRT 가 주는 실제 사유를 그대로 노출 (예: "존재하지않는 회원입니다.")
+        reason = str(e).strip() or "아이디/비밀번호를 확인해 주세요."
+        raise HTTPException(status_code=400, detail=f"SRT 로그인 실패: {reason} (SRT 회원 가입 여부·아이디 형식을 확인해 주세요. SRT와 코레일은 별도 회원입니다.)")
     except Exception:
         raise HTTPException(status_code=400, detail="SRT 로그인에 실패했습니다. 아이디/비밀번호를 확인해 주세요.")
     token = secrets.token_urlsafe(24)
@@ -93,7 +98,12 @@ def login_korail(req: LoginReq):
         if not getattr(client, "logined", True):
             raise RuntimeError("login failed")
     except Exception:
-        raise HTTPException(status_code=400, detail="코레일 로그인에 실패했습니다. 아이디/비밀번호를 확인해 주세요.")
+        raise HTTPException(
+            status_code=400,
+            detail="코레일 로그인 실패: 아래를 확인해 주세요. ① 코레일(KTX) 회원인지 — SRT와 코레일은 별도 회원입니다. "
+                   "② 아이디 형식(회원번호 8~10자리 / 이메일 / 휴대폰). ③ 코레일이 자동화 도구를 일시 차단(MACRO)했을 수 있어, "
+                   "이 경우 잠시 후 재시도하거나 코레일톡 공식 앱을 이용해 주세요.",
+        )
     token = secrets.token_urlsafe(24)
     with _lock:
         SESSIONS[token] = {"client": client, "kind": "korail", "ts": time.time()}
